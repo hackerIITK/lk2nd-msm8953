@@ -2198,6 +2198,13 @@ int boot_linux_from_mmc(void)
 		dtb = dev_tree_appended(image_buf, dtb_image_size, dtb_offset,
 				(void *)hdr->tags_addr);
 		if (!dtb) {
+			if (fdt_check_header((const void *)hdr->tags_addr) == 0) {
+				dprintf(CRITICAL, "[lk2nd] Using existing DTB at tags_addr 0x%x\n",
+					hdr->tags_addr);
+				dtb = (void *)hdr->tags_addr;
+			}
+		}
+		if (!dtb) {
 			dprintf(CRITICAL, "ERROR: Appended Device Tree Blob not found\n");
 			return -1;
 		}
@@ -2205,6 +2212,13 @@ int boot_linux_from_mmc(void)
 		dprintf(CRITICAL, "[lk2nd] Searching for appended DTB...\n");
 		dtb = dev_tree_appended(image_buf, dtb_image_size, dtb_offset,
 				(void *)hdr->tags_addr);
+		if (!dtb) {
+			if (fdt_check_header((const void *)hdr->tags_addr) == 0) {
+				dprintf(CRITICAL, "[lk2nd] Using existing DTB at tags_addr 0x%x\n",
+					hdr->tags_addr);
+				dtb = (void *)hdr->tags_addr;
+			}
+		}
 		if (!dtb) {
 			dprintf(CRITICAL, "ERROR: Appended Device Tree Blob not found\n");
 #if WITH_LK2ND_DEVICE_2ND
@@ -3241,6 +3255,21 @@ void cmd_boot(const char *arg, void *data, unsigned sz)
 	image_actual = ADD_OF(image_actual, second_actual);
 	image_actual = ADD_OF(image_actual, dt_actual);
 
+#ifdef OSVERSION_IN_BOOTIMAGE
+	if (hdr->header_version == BOOT_HEADER_VERSION_TWO) {
+		struct boot_img_hdr_v1 *hdr1 =
+			(struct boot_img_hdr_v1 *) (data + sizeof(boot_img_hdr));
+		struct boot_img_hdr_v2 *hdr2 = (struct boot_img_hdr_v2 *)
+			(data + sizeof(boot_img_hdr) +
+			BOOT_IMAGE_HEADER_V2_OFFSET);
+		unsigned int recovery_dtbo_actual =
+			ROUND_TO_PAGE(hdr1->recovery_dtbo_size, page_mask);
+
+		image_actual = ADD_OF(image_actual, recovery_dtbo_actual);
+		image_actual = ADD_OF(image_actual, ROUND_TO_PAGE(hdr2->dtb_size, page_mask));
+	}
+#endif
+
 	/* Checking to prevent oob access in read_der_message_length */
 	if (image_actual > sz) {
 		fastboot_fail("bootimage header fields are invalid");
@@ -3454,19 +3483,55 @@ void cmd_boot(const char *arg, void *data, unsigned sz)
 	 */
 	if (!dtb_copied) {
 		void *dtb;
+		void *image_buf = (void*)(ptr + page_size);
+		uint32_t dtb_image_size = hdr->kernel_size;
+
+#ifdef OSVERSION_IN_BOOTIMAGE
+		if (hdr->header_version == BOOT_HEADER_VERSION_TWO) {
+			struct boot_img_hdr_v1 *hdr1 =
+				(struct boot_img_hdr_v1 *) (ptr + sizeof(boot_img_hdr));
+			struct boot_img_hdr_v2 *hdr2 = (struct boot_img_hdr_v2 *)
+				(ptr + sizeof(boot_img_hdr) +
+				BOOT_IMAGE_HEADER_V2_OFFSET);
+			unsigned int recovery_dtbo_actual =
+				ROUND_TO_PAGE(hdr1->recovery_dtbo_size, page_mask);
+
+			dtb_offset = page_size + kernel_actual + ramdisk_actual +
+				     second_actual + recovery_dtbo_actual;
+			image_buf = (void *)ptr;
+			dtb_image_size = dtb_offset + ROUND_TO_PAGE(hdr2->dtb_size, page_mask);
+			dprintf(CRITICAL, "[lk2nd] Boot header v2 DTB at offset 0x%x (size %u)\n",
+				dtb_offset, hdr2->dtb_size);
+		}
+#endif
+
 #if TARGET_MSM8953
 		dprintf(CRITICAL, "[lk2nd] Appended DTB search with DTBO overlay (boot)...\n");
-		dtb = dev_tree_appended((void*)(ptr + page_size),
-					hdr->kernel_size, dtb_offset,
+		dtb = dev_tree_appended(image_buf,
+					dtb_image_size, dtb_offset,
 					(void *)hdr->tags_addr);
+		if (!dtb) {
+			if (fdt_check_header((const void *)hdr->tags_addr) == 0) {
+				dprintf(CRITICAL, "[lk2nd] Using existing DTB at tags_addr 0x%x\n",
+					hdr->tags_addr);
+				dtb = (void *)hdr->tags_addr;
+			}
+		}
 		if (!dtb) {
 			fastboot_fail("dtb not found");
 			goto boot_failed;
 		}
 #else
-		dtb = dev_tree_appended((void*)(ptr + page_size),
-					hdr->kernel_size, dtb_offset,
+		dtb = dev_tree_appended(image_buf,
+					dtb_image_size, dtb_offset,
 					(void *)hdr->tags_addr);
+		if (!dtb) {
+			if (fdt_check_header((const void *)hdr->tags_addr) == 0) {
+				dprintf(CRITICAL, "[lk2nd] Using existing DTB at tags_addr 0x%x\n",
+					hdr->tags_addr);
+				dtb = (void *)hdr->tags_addr;
+			}
+		}
 #if WITH_LK2ND_DEVICE_2ND
 		if (!dtb && lk2nd_device2nd_have_atags())
 			boot_type |= BOOT_ATAGS_COPY;
