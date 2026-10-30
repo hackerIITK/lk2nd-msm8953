@@ -227,6 +227,24 @@ unsigned char *lk2nd_device_update_cmdline(const char *cmdline, enum boot_type b
 			}
 		}
 #endif
+		extern unsigned boot_into_charger;
+		if (boot_into_charger) {
+			char *p_mode = strstr((char *)c, "androidboot.mode=");
+			if (p_mode) {
+				char *end = strchr(p_mode, ' ');
+				if (end) {
+					memmove(p_mode, end + 1, strlen(end + 1) + 1);
+				} else {
+					if (p_mode > (char *)c && *(p_mode - 1) == ' ')
+						*(p_mode - 1) = '\0';
+					else
+						*p_mode = '\0';
+				}
+			}
+			unsigned char *c_charger = concat_cmdline((const char *)c, "androidboot.mode=charger");
+			free(c);
+			c = c_charger;
+		}
 		return c;
 	}
 #endif

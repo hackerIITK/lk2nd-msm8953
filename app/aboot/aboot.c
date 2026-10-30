@@ -608,9 +608,11 @@ unsigned char *update_cmdline(const char * cmdline)
 		cmdline_len += strlen(loglevel);
 	} else if (boot_reason_alarm) {
 		cmdline_len += strlen(alarmboot_cmdline);
-	} else if (boot_into_charger ||
-			(((target_build_variant_user() || device.charger_screen_enabled)
-			  && target_pause_for_battery_charge()) && !boot_into_recovery)) {
+	} else if (boot_into_charger) {
+		pause_at_bootup = 1;
+		cmdline_len += strlen(battchg_pause);
+	} else if ((target_build_variant_user() || device.charger_screen_enabled)
+			&& target_pause_for_battery_charge() && !boot_into_recovery) {
 		pause_at_bootup = 1;
 		cmdline_len += strlen(battchg_pause);
 	}
@@ -1225,6 +1227,7 @@ void boot_linux(void *kernel, unsigned *tags,
 		boot_type |= BOOT_LK2ND;
 
 	final_cmdline = update_cmdline2(cmdline, boot_type);
+	dprintf(CRITICAL, "[lk2nd] Kernel cmdline: %s\n", final_cmdline);
 
 	if (boot_type & BOOT_ATAGS_COPY) {
 		generate_atags(tags, (const char *)final_cmdline,
