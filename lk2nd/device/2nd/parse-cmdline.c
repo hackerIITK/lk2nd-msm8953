@@ -112,7 +112,37 @@ void lk2nd_device2nd_parse_cmdline(void)
 /* Fastboot */
 static void cmd_oem_parsed_cmdline(const char *arg, void *data, unsigned sz)
 {
-	fastboot_stage(lk2nd_dev.cmdline, strlen(lk2nd_dev.cmdline));
+	const char *s = lk2nd_dev.cmdline;
+	char chunk[160];
+	int len, pos = 0;
+
+	if (!s) {
+		fastboot_fail("No parsed cmdline");
+		return;
+	}
+
+	if (arg && strcmp(arg, "stage") == 0) {
+		fastboot_stage(s, strlen(s));
+		return;
+	}
+
+	len = strlen(s);
+	while (pos < len) {
+		int chunk_len = len - pos;
+		if (chunk_len > 120) {
+			chunk_len = 120;
+			while (chunk_len > 60 && s[pos + chunk_len] != ' ')
+				chunk_len--;
+			if (s[pos + chunk_len] == ' ')
+				chunk_len++;
+		}
+		int copy_len = chunk_len < (int)sizeof(chunk) - 1 ? chunk_len : (int)sizeof(chunk) - 1;
+		memcpy(chunk, s + pos, copy_len);
+		chunk[copy_len] = '\0';
+		fastboot_info(chunk);
+		pos += copy_len;
+	}
+	fastboot_okay("");
 }
 static void lk2nd_device_parse_cmdline_register(void)
 {

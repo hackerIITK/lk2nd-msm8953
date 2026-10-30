@@ -188,6 +188,32 @@ const void *lk2nd_device2nd_parse_tags(void)
 /* Fastboot */
 static void cmd_oem_parsed_tags(const char *arg, void *data, unsigned sz)
 {
+	char buf[128];
+
+	if (!parsed_tags || !parsed_tags_size) {
+		fastboot_fail("No parsed tags");
+		return;
+	}
+
+	if (fdt_check_header(parsed_tags) == 0) {
+		const char *model = fdt_getprop(parsed_tags, 0, "model", NULL);
+		const char *compat = fdt_getprop(parsed_tags, 0, "compatible", NULL);
+
+		snprintf(buf, sizeof(buf), "Format: Device Tree Blob (DTB), %u bytes", parsed_tags_size);
+		fastboot_info(buf);
+		if (model) {
+			snprintf(buf, sizeof(buf), "Model: %s", model);
+			fastboot_info(buf);
+		}
+		if (compat) {
+			snprintf(buf, sizeof(buf), "Compatible: %s", compat);
+			fastboot_info(buf);
+		}
+	} else if (atags_copy) {
+		snprintf(buf, sizeof(buf), "Format: ATAGS, %u bytes", parsed_tags_size);
+		fastboot_info(buf);
+	}
+
 	fastboot_stage(parsed_tags, parsed_tags_size);
 }
 static void lk2nd_device_parse_tags_register(void)
