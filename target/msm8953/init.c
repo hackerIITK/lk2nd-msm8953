@@ -373,6 +373,12 @@ static void target_keystatus(void)
 
 void target_init(void)
 {
+	/* Hardware Watchdog Guardrails per GEMINI.md */
+	writel(0, 0x0B017004);          /* Hold APCS watchdog disabled */
+	writel(1, 0x0B017008);          /* Pet counter */
+	writel(0x7FFFFFFF, 0x0B017010); /* Max bark (0x7FFFFFFF) */
+	writel(0x7FFFFFFF, 0x0B017014); /* Max bite (0x7FFFFFFF) */
+
 	dprintf(INFO, "target_init()\n");
 
 	spmi_init(PMIC_ARB_CHANNEL_NUM, PMIC_ARB_OWNER_ID);

@@ -45,5 +45,7 @@ DEV_TREE_UPDATE(lk2nd_version_dt_update);
 static void lk2nd_version_publish(void)
 {
 	fastboot_publish("lk2nd:version", LK2ND_VERSION);
+	fastboot_publish("lk2nd:build-time", LK2ND_BUILD_TIME_IST);
+	fastboot_publish("build-time", LK2ND_BUILD_TIME_IST);
 }
 FASTBOOT_INIT(lk2nd_version_publish);

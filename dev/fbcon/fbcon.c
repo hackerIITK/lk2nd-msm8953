@@ -437,6 +437,18 @@ newline:
 		fbcon_flush();
 }
 
+static int fbcon_log_level = 0; /* CRITICAL (0) only by default */
+
+int fbcon_get_log_level(void)
+{
+	return fbcon_log_level;
+}
+
+void fbcon_set_log_level(int level)
+{
+	fbcon_log_level = level;
+}
+
 void fbcon_putc(char c, int y_start)
 {
 	fbcon_putc_factor(c, FBCON_COMMON_MSG, SCALE_FACTOR, y_start);

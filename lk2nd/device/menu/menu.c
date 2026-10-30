@@ -192,6 +192,7 @@ void display_fastboot_menu(void)
 	incr = FONT_HEIGHT * scale_factor;
 
 	fbcon_puts_ln(SILVER, y, incr, true, LK2ND_VERSION);
+	fbcon_puts_ln(SILVER, y, incr, true, LK2ND_BUILD_TIME_IST);
 	if (lk2nd_dev.model)
 		fbcon_puts_ln(SILVER, y, incr, true, lk2nd_dev.model);
 	else
@@ -301,5 +302,6 @@ void display_default_image_on_screen(void)
 
 	fbcon_puts_ln(WHITE, y, incr, true, xstr(BOARD));
 	fbcon_puts_ln(SILVER, y, incr, true, LK2ND_VERSION);
+	fbcon_puts_ln(SILVER, y, incr, true, LK2ND_BUILD_TIME_IST);
 	fbcon_flush();
 }

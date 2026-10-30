@@ -1293,7 +1293,7 @@ tags_done:
 	if (final_cmdline)
 		free(final_cmdline);
 
-	dprintf(INFO, "booting linux @ %p, ramdisk @ %p (%d), tags/device tree @ %p\n",
+	dprintf(CRITICAL, "[lk2nd] Booting linux @ %p, ramdisk @ %p (%d), tags @ %p\n",
 		entry, ramdisk, ramdisk_size, (void *)tags_phys);
 
 	enter_critical_section();

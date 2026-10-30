@@ -122,4 +122,6 @@ uint32_t fbcon_get_width(void);
 uint32_t fbcon_get_height(void);
 void fbcon_flush(void);
 int fetch_image_from_partition(void);
+int fbcon_get_log_level(void);
+void fbcon_set_log_level(int level);
 #endif /* __DEV_FBCON_H */

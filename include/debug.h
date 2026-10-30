@@ -53,10 +53,15 @@ int _dputs(const char *str);
 int _dprintf(const char *fmt, ...) __PRINTFLIKE(1, 2);
 int _dvprintf(const char *fmt, va_list ap);
 
-#define dputc(level, str) do { if ((level) <= DEBUGLEVEL) { _dputc(str); } } while (0)
-#define dputs(level, str) do { if ((level) <= DEBUGLEVEL) { _dputs(str); } } while (0)
-#define dprintf(level, x...) do { if ((level) <= DEBUGLEVEL) { _dprintf(x); } } while (0)
-#define dvprintf(level, x...) do { if ((level) <= DEBUGLEVEL) { _dvprintf(x); } } while (0)
+int debug_get_current_level(void);
+void debug_set_current_level(int level);
+int _dprintf_level(int level, const char *fmt, ...) __PRINTFLIKE(2, 3);
+int _dvprintf_level(int level, const char *fmt, va_list ap);
+
+#define dputc(level, str) do { if ((level) <= DEBUGLEVEL) { debug_set_current_level(level); _dputc(str); } } while (0)
+#define dputs(level, str) do { if ((level) <= DEBUGLEVEL) { debug_set_current_level(level); _dputs(str); } } while (0)
+#define dprintf(level, x...) do { if ((level) <= DEBUGLEVEL) { _dprintf_level(level, x); } } while (0)
+#define dvprintf(level, x...) do { if ((level) <= DEBUGLEVEL) { _dvprintf_level(level, x); } } while (0)
 
 /* input */
 int dgetc(char *c, bool wait);

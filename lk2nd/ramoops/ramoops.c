@@ -8,10 +8,16 @@
 #include <libfdt.h>
 #include <target.h>
 #include <zlib.h>
+#include <arch/ops.h>
+#include <string.h>
 
 #include <lk2nd/util/cmdline.h>
+#include <lk2nd/ramoops.h>
 
 #define PERSISTENT_RAM_SIG (0x43474244) /* DBGC */
+
+#define DOWNSTREAM_RAMOOPS_ADDR (0x91400000)
+#define DOWNSTREAM_RAMOOPS_SIZE (0x00400000) /* 4MB */
 
 struct pram_buf {
 	uint32_t sig;
@@ -52,6 +58,59 @@ static void get_ramoops_region(struct ramoops_region *region)
 	region->base		= (scratch + scratch_size - region->size);
 }
 
+static struct pram_buf *console_buf = NULL;
+static uint32_t console_max_size = 0;
+static bool ramoops_ready = false;
+
+void lk2nd_ramoops_init(void)
+{
+	struct ramoops_region region;
+
+	if (ramoops_ready)
+		return;
+
+	get_ramoops_region(&region);
+	if (!region.base || !region.console_size)
+		return;
+
+	console_buf = (struct pram_buf *)(region.base + region.dump_size);
+	console_max_size = region.console_size - sizeof(struct pram_buf);
+
+	/* Check if existing buffer is valid pram_buf */
+	if (console_buf->sig != PERSISTENT_RAM_SIG ||
+	    console_buf->size > console_max_size ||
+	    console_buf->offt > console_max_size) {
+		console_buf->sig = PERSISTENT_RAM_SIG;
+		console_buf->offt = 0;
+		console_buf->size = 0;
+	}
+
+	ramoops_ready = true;
+}
+
+void lk2nd_ramoops_putc(char c)
+{
+	if (!ramoops_ready) {
+		lk2nd_ramoops_init();
+		if (!ramoops_ready)
+			return;
+	}
+
+	uint32_t offt = console_buf->offt;
+	console_buf->data[offt] = c;
+	offt++;
+	if (offt >= console_max_size)
+		offt = 0;
+	console_buf->offt = offt;
+
+	if (console_buf->size < console_max_size)
+		console_buf->size++;
+
+	/* Clean cache line on newline so persistent RAM survives warm reset */
+	if (c == '\n') {
+		arch_clean_invalidate_cache_range((addr_t)console_buf, sizeof(struct pram_buf) + 64);
+	}
+}
 
 static int lk2nd_ramoops_dt_update(void *dtb, const char *cmdline, enum boot_type boot_type)
 {
@@ -126,10 +185,23 @@ static void cmd_oem_ramoops_raw(const char *arg, void *data, unsigned sz)
 {
 	struct ramoops_region region;
 
+	/* If downstream ramoops is active at 0x91400000, stage it (4MB) */
+	struct pram_buf *downstream = (struct pram_buf *)DOWNSTREAM_RAMOOPS_ADDR;
+	if (downstream->sig == PERSISTENT_RAM_SIG) {
+		fastboot_stage((void *)DOWNSTREAM_RAMOOPS_ADDR, DOWNSTREAM_RAMOOPS_SIZE);
+		return;
+	}
+
 	get_ramoops_region(&region);
 	fastboot_stage(region.base, region.size);
 }
 FASTBOOT_REGISTER("oem ramoops raw", cmd_oem_ramoops_raw);
+
+static void cmd_oem_raw(const char *arg, void *data, unsigned sz)
+{
+	cmd_oem_ramoops_raw(arg, data, sz);
+}
+FASTBOOT_REGISTER("oem raw", cmd_oem_raw);
 
 #define RAMOOPS_KERNMSG_HDR 0x3d3d3d3d /* ==== */
 struct kmsg_hdr {
@@ -148,6 +220,14 @@ static void cmd_oem_ramoops_regions(const char *arg, void *data, unsigned sz)
 	uint8_t *record_base;
 	char response[MAX_RSP_SIZE], header[sizeof(struct kmsg_hdr)];
 	int i, count;
+
+	/* Check downstream 4MB ramoops */
+	struct pram_buf *downstream = (struct pram_buf *)DOWNSTREAM_RAMOOPS_ADDR;
+	if (downstream->sig == PERSISTENT_RAM_SIG) {
+		snprintf(response, sizeof(response), "DOWNSTREAM: 4MB @ 0x%08x (sig:0x%x sz:0x%x)",
+			 DOWNSTREAM_RAMOOPS_ADDR, downstream->sig, downstream->size);
+		fastboot_info(response);
+	}
 
 	get_ramoops_region(&region);
 
@@ -174,16 +254,12 @@ static void cmd_oem_ramoops_regions(const char *arg, void *data, unsigned sz)
 	}
 
 	if (region.console_size) {
-			snprintf(response, sizeof(response), "CONSOLE: (0x%x) 0x%x @ (0x%x + 0x%x)",
-				 record->sig, record->size, (uint32_t)record, record->offt);
-			fastboot_info(response);
-
-			record_base += region.console_size;
-			record = (struct pram_buf*)record_base;
+		snprintf(response, sizeof(response), "CONSOLE: (0x%x) 0x%x @ (0x%x + 0x%x)",
+			 record->sig, record->size, (uint32_t)record, record->offt);
+		fastboot_info(response);
 	}
 
 	fastboot_okay("");
-
 }
 FASTBOOT_REGISTER("oem ramoops regions", cmd_oem_ramoops_regions);
 
@@ -192,15 +268,40 @@ static void cmd_oem_ramoops_console(const char *arg, void *data, unsigned sz)
 	struct ramoops_region region;
 	struct pram_buf *record;
 	uint8_t *record_base;
+	uint32_t max_size;
 
 	get_ramoops_region(&region);
 
 	record_base = region.base + region.dump_size;
 	record = (struct pram_buf*)record_base;
 
-	fastboot_stage(record->data, record->size);
+	if (record->sig != PERSISTENT_RAM_SIG || record->size == 0) {
+		fastboot_fail("No console ramoops data found.");
+		return;
+	}
+
+	max_size = region.console_size - sizeof(struct pram_buf);
+
+	/* If circular buffer wrapped, reassemble in scratch in chronological order */
+	if (record->size >= max_size && record->offt > 0 && record->offt < max_size) {
+		void *scratch = target_get_scratch_address();
+		uint32_t part1 = max_size - record->offt;
+		uint32_t part2 = record->offt;
+
+		memcpy(scratch, record->data + record->offt, part1);
+		memcpy((uint8_t *)scratch + part1, record->data, part2);
+		fastboot_stage(scratch, max_size);
+	} else {
+		fastboot_stage(record->data, record->size);
+	}
 }
 FASTBOOT_REGISTER("oem ramoops console", cmd_oem_ramoops_console);
+
+static void cmd_oem_log(const char *arg, void *data, unsigned sz)
+{
+	cmd_oem_ramoops_console(arg, data, sz);
+}
+FASTBOOT_REGISTER("oem log", cmd_oem_log);
 
 static void cmd_oem_ramoops_dump(const char *arg, void *data, unsigned sz)
 {
@@ -208,34 +309,47 @@ static void cmd_oem_ramoops_dump(const char *arg, void *data, unsigned sz)
 	void *scratch = target_get_scratch_address();
 	struct ramoops_region region;
 	char response[MAX_RSP_SIZE];
-	struct pram_buf *record;
-	struct kmsg_hdr *header;
-	uint8_t *record_base;
+	struct pram_buf *record = NULL;
+	struct kmsg_hdr *header = NULL;
 	int ret;
 
-	get_ramoops_region(&region);
+	/* First, check downstream 4MB ramoops at 0x91400000 */
+	struct pram_buf *downstream = (struct pram_buf *)DOWNSTREAM_RAMOOPS_ADDR;
+	if (downstream->sig == PERSISTENT_RAM_SIG && downstream->size > 0) {
+		record = downstream;
+	} else {
+		/* Fallback to lk2nd's ramoops dump region */
+		get_ramoops_region(&region);
+		record = (struct pram_buf *)region.base;
+	}
 
-	record_base = region.base;
-	record = (struct pram_buf*)record_base;
-	header = (struct kmsg_hdr*)record->data;
+	if (record->sig != PERSISTENT_RAM_SIG || record->size == 0) {
+		fastboot_fail("No ramoops dump found.");
+		return;
+	}
 
-	/*
-	 * FIXME: this is pretty much useless right now.
-	 * 1) This only checks the first record, not all of them.
-	 * 2) This can't really work without ECC...
-	 */
+	header = (struct kmsg_hdr *)record->data;
+
+	if (header->magic != RAMOOPS_KERNMSG_HDR) {
+		/* Not a formatted panic record, but valid persistent ram log buffer */
+		size = record->size;
+		if (size > target_get_max_flash_size())
+			size = target_get_max_flash_size();
+		memcpy(scratch, record->data, size);
+		fastboot_stage(scratch, size);
+		return;
+	}
 
 	memset(scratch, 0, record->size);
-
-	if (header->magic != RAMOOPS_KERNMSG_HDR)
-		fastboot_fail("Dump corrupted.");
 
 	if (header->compressed == 'C') {
 		ret = uncompress(scratch, &size, header->data, record->size);
 		snprintf(response, sizeof(response), "ramoops decompress is %d", ret);
 		fastboot_info(response);
-		if (ret < 0)
+		if (ret < 0) {
 			fastboot_fail("Decompression failed.");
+			return;
+		}
 	} else {
 		size = record->size - sizeof(struct kmsg_hdr);
 		memcpy(scratch, header->data, size);
@@ -244,3 +358,9 @@ static void cmd_oem_ramoops_dump(const char *arg, void *data, unsigned sz)
 	fastboot_stage(scratch, size);
 }
 FASTBOOT_REGISTER("oem ramoops dump", cmd_oem_ramoops_dump);
+
+static void cmd_oem_dmesg(const char *arg, void *data, unsigned sz)
+{
+	cmd_oem_ramoops_dump(arg, data, sz);
+}
+FASTBOOT_REGISTER("oem dmesg", cmd_oem_dmesg);

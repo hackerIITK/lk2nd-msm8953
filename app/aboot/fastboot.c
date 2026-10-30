@@ -29,6 +29,7 @@
  */
 
 #include <debug.h>
+#include <reg.h>
 #include <string.h>
 #include <stdlib.h>
 #include <platform.h>
@@ -265,8 +266,6 @@ static int usb30_usb_write(void *buf, unsigned len)
 	if (fastboot_state == STATE_ERROR)
 		goto oops;
 
-	dprintf(SPEW, "usb_write(): len = %d str = %s\n", len, (char *) buf);
-
 	/* flush buffer to main memory before giving to udc */
 	arch_clean_invalidate_cache_range((addr_t) buf, len);
 
@@ -280,9 +279,6 @@ static int usb30_usb_write(void *buf, unsigned len)
 		goto oops;
 	}
 	event_wait(&txn_done);
-
-	dprintf(SPEW, "usb_write(): DONE: len = %d req->length = %d str = %s\n",
-			len, req.length, (char *) buf);
 
 	if (txn_status < 0) {
 		dprintf(CRITICAL, "usb_write() transaction failed. txn_status = %d\n",
@@ -581,6 +577,9 @@ again:
 		r = usb_if.usb_read(buffer, MAX_RSP_SIZE);
 		if (r < 0) break;
 		buffer[r] = 0;
+		/* Pet APCS watchdog */
+		writel(0, 0x0B017004);
+		writel(1, 0x0B017008);
 		dprintf(INFO,"fastboot: %s\n", buffer);
 
 #if CHECK_BAT_VOLTAGE

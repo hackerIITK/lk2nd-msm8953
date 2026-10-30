@@ -45,6 +45,8 @@
 #include <vibrator.h>
 #endif
 
+extern void lk2nd_ramoops_putc(char c);
+
 
 static void write_dcc(char c)
 {
@@ -129,6 +131,8 @@ void debug_init(void)
 
 void _dputc(char c)
 {
+	lk2nd_ramoops_putc(c);
+
 #if WITH_DEBUG_LOG_BUF
 	log_putc(c);
 #endif
@@ -142,7 +146,9 @@ void _dputc(char c)
 	uart_putc(0, c);
 #endif
 #if WITH_DEBUG_FBCON && WITH_DEV_FBCON
-	fbcon_putc(c, 0);
+	if (debug_get_current_level() <= fbcon_get_log_level()) {
+		fbcon_putc(c, 0);
+	}
 #endif
 #if WITH_DEBUG_JTAG
 	jtag_dputc(c);

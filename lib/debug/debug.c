@@ -92,6 +92,18 @@ int _dputs(const char *str)
 	return 0;
 }
 
+static int current_debug_level = ALWAYS;
+
+int debug_get_current_level(void)
+{
+	return current_debug_level;
+}
+
+void debug_set_current_level(int level)
+{
+	current_debug_level = level;
+}
+
 static int _dprintf_output_func(char c, void *state)
 {
 	_dputc(c);
@@ -99,17 +111,46 @@ static int _dprintf_output_func(char c, void *state)
 	return INT_MAX;
 }
 
-int _dprintf(const char *fmt, ...)
+int _dprintf_level(int level, const char *fmt, ...)
 {
 	char ts_buf[13];
 	int err;
+	int old_level = current_debug_level;
 
-	snprintf(ts_buf, sizeof(ts_buf), "[%u] ",(unsigned int)current_time());
-	dputs(ALWAYS, ts_buf);
+	current_debug_level = level;
+
+	snprintf(ts_buf, sizeof(ts_buf), "[%u] ", (unsigned int)current_time());
+	_dputs(ts_buf);
 
 	va_list ap;
 	va_start(ap, fmt);
 	err = _printf_engine(&_dprintf_output_func, NULL, fmt, ap);
+	va_end(ap);
+
+	current_debug_level = old_level;
+
+	return err;
+}
+
+int _dvprintf_level(int level, const char *fmt, va_list ap)
+{
+	int err;
+	int old_level = current_debug_level;
+
+	current_debug_level = level;
+	err = _printf_engine(&_dprintf_output_func, NULL, fmt, ap);
+	current_debug_level = old_level;
+
+	return err;
+}
+
+int _dprintf(const char *fmt, ...)
+{
+	va_list ap;
+	int err;
+
+	va_start(ap, fmt);
+	err = _dvprintf_level(ALWAYS, fmt, ap);
 	va_end(ap);
 
 	return err;
@@ -117,11 +158,7 @@ int _dprintf(const char *fmt, ...)
 
 int _dvprintf(const char *fmt, va_list ap)
 {
-	int err;
-
-	err = _printf_engine(&_dprintf_output_func, NULL, fmt, ap);
-
-	return err;
+	return _dvprintf_level(ALWAYS, fmt, ap);
 }
 
 void hexdump(const void *ptr, size_t len)
