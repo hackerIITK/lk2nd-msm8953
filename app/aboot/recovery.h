@@ -122,5 +122,6 @@ int get_ffbm(char *ffbm, unsigned size);
 VirtualAbMergeStatus GetSnapshotMergeStatus(void);
 int SetSnapshotMergeStatus (VirtualAbMergeStatus MergeStatus);
 extern unsigned boot_into_recovery;
+extern unsigned boot_into_charger;
 
 #endif

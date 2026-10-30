@@ -120,6 +120,7 @@ static int aboot_frp_unlock(char *pname, void *data, unsigned sz);
 static inline uint64_t validate_partition_size(struct ptentry *ptn);
 bool pwr_key_is_pressed = false;
 unsigned boot_into_recovery = 0;
+unsigned boot_into_charger = 0;
 static bool is_systemd_present=false;
 static void publish_getvar_multislot_vars(void);
 /* fastboot command function pointer */
@@ -607,8 +608,9 @@ unsigned char *update_cmdline(const char * cmdline)
 		cmdline_len += strlen(loglevel);
 	} else if (boot_reason_alarm) {
 		cmdline_len += strlen(alarmboot_cmdline);
-	} else if ((target_build_variant_user() || device.charger_screen_enabled)
-			&& target_pause_for_battery_charge() && !boot_into_recovery) {
+	} else if (boot_into_charger ||
+			(((target_build_variant_user() || device.charger_screen_enabled)
+			  && target_pause_for_battery_charge()) && !boot_into_recovery)) {
 		pause_at_bootup = 1;
 		cmdline_len += strlen(battchg_pause);
 	}
@@ -1628,10 +1630,10 @@ int boot_linux_from_mmc(void)
 	struct kernel64_hdr *kptr = NULL;
 	int current_active_slot = INVALID;
 
-	if (!IS_ENABLED(ABOOT_STANDALONE) && check_format_bit())
+	if (!IS_ENABLED(ABOOT_STANDALONE) && !boot_into_charger && check_format_bit())
 		boot_into_recovery = 1;
 
-	if (!IS_ENABLED(ABOOT_STANDALONE) && !boot_into_recovery) {
+	if (!IS_ENABLED(ABOOT_STANDALONE) && !boot_into_recovery && !boot_into_charger) {
 		memset(ffbm_mode_string, '\0', sizeof(ffbm_mode_string));
 		rcode = get_ffbm(ffbm_mode_string, sizeof(ffbm_mode_string));
 		if (rcode <= 0) {
@@ -4755,7 +4757,7 @@ void cmd_continue(const char *arg, void *data, unsigned sz)
 	fastboot_stop();
 
 	dprintf(CRITICAL, "\n[lk2nd] Continuing boot (target: %s)...\n",
-		boot_into_recovery ? "recovery" : "boot");
+		boot_into_recovery ? "recovery" : (boot_into_charger ? "charger" : "boot"));
 
 	if (target_is_emmc_boot())
 	{
@@ -4764,7 +4766,7 @@ void cmd_continue(const char *arg, void *data, unsigned sz)
 		exit_menu_keys_detection();
 #endif
 #if WITH_LK2ND_BOOT
-		if (!boot_into_recovery)
+		if (!boot_into_recovery && !boot_into_charger)
 			lk2nd_boot();
 #endif
 		ret = boot_linux_from_mmc();
@@ -4776,7 +4778,7 @@ void cmd_continue(const char *arg, void *data, unsigned sz)
 
 	dprintf(CRITICAL, "\n========================================\n");
 	dprintf(CRITICAL, "[lk2nd] Boot %s failed! (ret=%d)\n",
-		boot_into_recovery ? "recovery" : "boot", ret);
+		boot_into_recovery ? "recovery" : (boot_into_charger ? "charger" : "boot"), ret);
 	dprintf(CRITICAL, "========================================\n");
 	dprintf(CRITICAL, "Pausing for 10 seconds before returning to menu...\n");
 	thread_sleep(10000);

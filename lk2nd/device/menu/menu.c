@@ -130,6 +130,13 @@ static void opt_recovery(void)
 	boot_into_recovery = 1;
 	cmd_continue(NULL, NULL, 0);
 }
+static void opt_charger(void)
+{
+	extern unsigned boot_into_charger;
+
+	boot_into_charger = 1;
+	cmd_continue(NULL, NULL, 0);
+}
 static void opt_bootloader(void) { reboot_device(FASTBOOT_MODE); }
 static void opt_edl(void)        { reboot_device(EMERGENCY_DLOAD); }
 static void opt_shutdown(void)   { shutdown_device(); }
@@ -142,6 +149,7 @@ static struct {
 	{ "  Reboot  ", GREEN,  opt_reboot },
 	{ " Continue ", WHITE,  opt_continue },
 	{ " Recovery ", ORANGE, opt_recovery },
+	{ " Charger  ", YELLOW, opt_charger },
 	{ "Bootloader", ORANGE, opt_bootloader },
 	{ "    EDL   ", RED,    opt_edl },
 	{ " Shutdown ", RED,    opt_shutdown },

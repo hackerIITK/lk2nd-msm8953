@@ -19,3 +19,21 @@ static void cmd_oem_reboot_edl(const char *arg, void *data, unsigned sz)
 	reboot_device(EMERGENCY_DLOAD);
 }
 FASTBOOT_REGISTER("oem reboot-edl", cmd_oem_reboot_edl);
+
+static void cmd_oem_charger(const char *arg, void *data, unsigned sz)
+{
+	extern unsigned boot_into_charger;
+	extern void cmd_continue(const char *arg, void *data, unsigned sz);
+
+	dprintf(INFO, "booting into charger mode\n");
+	boot_into_charger = 1;
+	fastboot_okay("");
+	cmd_continue(NULL, NULL, 0);
+}
+
+static void lk2nd_charger_fastboot_register(void)
+{
+	fastboot_register("oem charger", cmd_oem_charger);
+	fastboot_register("reboot-charger", cmd_oem_charger);
+}
+FASTBOOT_INIT(lk2nd_charger_fastboot_register);
