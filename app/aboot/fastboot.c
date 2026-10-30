@@ -620,6 +620,10 @@ again:
 			else if (arg[0] && arg[-1] != ':')
 				continue;
 
+#if WITH_LK2ND_DEVICE_MENU
+			extern void lk2nd_menu_user_activity(void);
+			lk2nd_menu_user_activity();
+#endif
 			cmd->handle(arg, download_base, download_size);
 			if (fastboot_state == STATE_COMMAND)
 				fastboot_fail("unknown reason");

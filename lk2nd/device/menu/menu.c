@@ -8,6 +8,9 @@
 #include <display_menu.h>
 #include <kernel/thread.h>
 #include <platform.h>
+#include <platform/gpio.h>
+#include <reg.h>
+#include <spmi.h>
 #include <stdlib.h>
 #include <string.h>
 #include <sys/types.h>
@@ -88,35 +91,6 @@ static uint16_t lk2nd_boot_pressed_key(void)
 	return 0;
 }
 
-#define LONG_PRESS_DURATION 1000
-
-static uint16_t wait_key(void)
-{
-	uint16_t keycode = 0;
-	int press_start = 0;
-	int press_duration;
-
-	while (!(keycode = lk2nd_boot_pressed_key()))
-		thread_sleep(1);
-
-	press_start = current_time();
-
-	while (lk2nd_keys_pressed(keycode)) {
-		thread_sleep(1);
-
-		press_duration = current_time() - press_start;
-		if (lk2nd_dev.single_key && press_duration > LONG_PRESS_DURATION)
-			return KEY_POWER;
-	}
-
-	if (lk2nd_dev.single_key)
-		keycode = KEY_VOLUMEDOWN;
-
-	/* A small debounce delay */
-	thread_sleep(5);
-
-	return keycode;
-}
 
 #define xstr(s) str(s)
 #define str(s) #s
@@ -167,22 +141,55 @@ static struct {
 		y += incr; \
 	} while(0)
 
-void display_fastboot_menu(void)
+#define LONG_PRESS_DURATION 1000
+#define AUTO_SLEEP_TIMEOUT_MS 30000 /* 30 seconds inactivity timeout */
+
+void lk2nd_menu_user_activity(void);
+
+static bool screen_asleep = false;
+static time_t last_activity_time = 0;
+static int menu_old_scale = 1;
+static int menu_incr = 12;
+static int menu_y_menu = 0;
+static unsigned int menu_current_sel = 0;
+
+static void draw_menu_options(unsigned int sel)
+{
+	int y = menu_y_menu;
+	int incr = menu_incr;
+	unsigned int i;
+
+	scale_factor = menu_old_scale;
+	fbcon_clear_msg(y / FONT_HEIGHT, (y / FONT_HEIGHT + ARRAY_SIZE(menu_options) * scale_factor));
+	for (i = 0; i < ARRAY_SIZE(menu_options); ++i) {
+		fbcon_printf_ln(
+			i == sel ? menu_options[i].color : SILVER,
+			y, incr, true, "%c %s %c",
+			i == sel ? '>' : ' ',
+			menu_options[i].name,
+			i == sel ? '<' : ' '
+		);
+	}
+
+	fbcon_flush();
+}
+
+static void draw_full_menu(unsigned int sel)
 {
 	struct fbcon_config *fb = fbcon_display();
-	int y, y_menu, old_scale, incr;
-	unsigned int sel = 0, i;
+	int y, incr;
 	bool armv8 = is_scm_armv8_support();
 
 	if (!fb)
 		return;
 
 	/*
-	 * Make sure the specified line lenght fits on the screen.
+	 * Make sure the specified line length fits on the screen.
 	 */
 	scale_factor = max(1U, min(fb->width, fb->height) / (FONT_WIDTH * MIN_LINE));
-	old_scale = scale_factor;
-	incr = FONT_HEIGHT * scale_factor;
+	menu_old_scale = scale_factor;
+	menu_incr = FONT_HEIGHT * scale_factor;
+	incr = menu_incr;
 
 	y = incr * 2;
 
@@ -196,7 +203,7 @@ void display_fastboot_menu(void)
 	incr = FONT_HEIGHT * scale_factor;
 	fbcon_puts_ln(WHITE, y, incr, true, xstr(BOARD));
 
-	scale_factor = old_scale;
+	scale_factor = menu_old_scale;
 	incr = FONT_HEIGHT * scale_factor;
 
 	fbcon_puts_ln(SILVER, y, incr, true, LK2ND_VERSION);
@@ -211,7 +218,7 @@ void display_fastboot_menu(void)
 	y += incr;
 
 	/* Skip lines for the menu */
-	y_menu = y;
+	menu_y_menu = y;
 	y += incr * (ARRAY_SIZE(menu_options) + 1);
 
 	if (lk2nd_dev.single_key) {
@@ -234,7 +241,6 @@ void display_fastboot_menu(void)
 
 	fbcon_puts_ln(WHITE, y, incr, true, "About this device");
 
-
 	if (lk2nd_dev.panel.name)
 		fbcon_printf_ln(SILVER, y, incr, false, " Panel:  %s", lk2nd_dev.panel.name);
 	if (lk2nd_dev.battery)
@@ -248,34 +254,150 @@ void display_fastboot_menu(void)
 			armv8 ? "available" : "unavailable");
 
 	/*
-	 * Loop to render the menu elements
+	 * Render the menu elements
 	 */
+	draw_menu_options(sel);
+}
 
-	scale_factor = old_scale;
-	incr = FONT_HEIGHT * scale_factor;
-	while (true) {
-		y = y_menu;
-		fbcon_clear_msg(y / FONT_HEIGHT, (y / FONT_HEIGHT + ARRAY_SIZE(menu_options) * scale_factor));
-		for (i = 0; i < ARRAY_SIZE(menu_options); ++i) {
-			fbcon_printf_ln(
-				i == sel ? menu_options[i].color : SILVER,
-				y, incr, true, "%c %s %c",
-				i == sel ? '>' : ' ',
-				menu_options[i].name,
-				i == sel ? '<' : ' '
-			);
+static void display_sleep(void)
+{
+	if (screen_asleep)
+		return;
+
+	screen_asleep = true;
+
+	/* Blank framebuffer to solid black */
+	fbcon_clear();
+	fbcon_flush();
+
+	/* Deassert hardware backlight enable GPIOs (GPIO 136 onclite, GPIO 59 msm8953 ref) */
+	gpio_set_dir(136, 0);
+	gpio_set_dir(59, 0);
+
+	/* Gate PMIC PWM & WLED modules if SPMI is active */
+	if (spmi_initialized()) {
+		pmic_spmi_reg_mask_write(0x1bc46, 0x80, 0x00);
+		pmic_spmi_reg_mask_write(0x3d846, 0x80, 0x00);
+	}
+}
+
+static void display_wake(unsigned int sel)
+{
+	if (!screen_asleep)
+		return;
+
+	/* Restore hardware backlight enable GPIOs */
+	gpio_set_dir(136, 2);
+	gpio_set_dir(59, 2);
+
+	/* Re-enable PMIC PWM & WLED modules */
+	if (spmi_initialized()) {
+		pmic_spmi_reg_mask_write(0x1bc46, 0x80, 0x80);
+		pmic_spmi_reg_mask_write(0x3d846, 0x80, 0x80);
+	}
+
+	/* Redraw full menu and update screen */
+	draw_full_menu(sel);
+
+	screen_asleep = false;
+	last_activity_time = current_time();
+}
+
+void lk2nd_menu_user_activity(void)
+{
+	last_activity_time = current_time();
+	if (screen_asleep)
+		display_wake(menu_current_sel);
+}
+
+static uint16_t wait_key(unsigned int sel)
+{
+	uint16_t keycode = 0;
+	int press_start = 0;
+	int press_duration;
+
+	while (1) {
+		/* Always keep APCS watchdog disabled and petted */
+		writel(0, 0x0B017004);
+		writel(1, 0x0B017008);
+
+		keycode = lk2nd_boot_pressed_key();
+		if (keycode) {
+			last_activity_time = current_time();
+			if (screen_asleep) {
+				/* Wake up display */
+				display_wake(sel);
+
+				/* Wait for user to release wake key to prevent accidental selection */
+				while (lk2nd_boot_pressed_key()) {
+					thread_sleep(10);
+					writel(0, 0x0B017004);
+					writel(1, 0x0B017008);
+				}
+				thread_sleep(50);
+				continue;
+			}
+			break;
 		}
 
-		fbcon_flush();
+		/* Check for inactivity timeout */
+		if (!screen_asleep && (current_time() - last_activity_time >= AUTO_SLEEP_TIMEOUT_MS)) {
+			display_sleep();
+		}
 
-		switch (wait_key()) {
+		thread_sleep(5);
+	}
+
+	press_start = current_time();
+
+	while (lk2nd_keys_pressed(keycode)) {
+		thread_sleep(1);
+		writel(0, 0x0B017004);
+		writel(1, 0x0B017008);
+
+		press_duration = current_time() - press_start;
+		if (lk2nd_dev.single_key && press_duration > LONG_PRESS_DURATION)
+			return KEY_POWER;
+	}
+
+	if (lk2nd_dev.single_key)
+		keycode = KEY_VOLUMEDOWN;
+
+	/* A small debounce delay */
+	thread_sleep(5);
+
+	return keycode;
+}
+
+void display_fastboot_menu(void)
+{
+	struct fbcon_config *fb = fbcon_display();
+	int y, incr;
+	unsigned int sel = 0;
+
+	if (!fb)
+		return;
+
+	menu_current_sel = sel;
+	last_activity_time = current_time();
+	draw_full_menu(sel);
+
+	/*
+	 * Loop to handle menu navigation and selection
+	 */
+	while (true) {
+		menu_current_sel = sel;
+		switch (wait_key(sel)) {
 		case KEY_POWER:
-			y = y_menu + incr * sel;
+			scale_factor = menu_old_scale;
+			incr = menu_incr;
+			y = menu_y_menu + incr * sel;
 			fbcon_printf_ln(
 				menu_options[sel].color,
 				y, incr, true, ">> %s <<",
 				menu_options[sel].name
 			);
+			fbcon_flush();
 			menu_options[sel].action();
 			break;
 		case KEY_VOLUMEUP:
@@ -283,11 +405,13 @@ void display_fastboot_menu(void)
 				sel = ARRAY_SIZE(menu_options) - 1;
 			else
 				sel--;
+			draw_menu_options(sel);
 			break;
 		case KEY_VOLUMEDOWN:
 			sel++;
 			if (sel >= ARRAY_SIZE(menu_options))
 				sel = 0;
+			draw_menu_options(sel);
 			break;
 		}
 	}
